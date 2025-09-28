@@ -28,7 +28,7 @@ public class AuthMiddleware extends OncePerRequestFilter {
   @Override
   protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
       FilterChain chain) throws ServletException, IOException {
-    // 允許登入路徑不經過驗證
+    // 允許登入路徑不經過驗證，除了 /oauth2/authorize的/oauth2也不需要經過驗證
     if (!request.getRequestURI().equals("/oauth2/authorize")
         && (request.getRequestURI().equals("/sessions")
             || request.getRequestURI().startsWith("/oauth2"))) {

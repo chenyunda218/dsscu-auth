@@ -65,4 +65,25 @@ public class Application {
     return this.redirectUri.equals(uri);
   }
 
+  public boolean validateScope(String scope) {
+    if (this.scopes == null || this.scopes.isEmpty()) {
+      return false;
+    }
+    String[] allowedScopes = this.scopes.split(" ");
+    String[] requestedScopes = scope.split(" ");
+    for (String req : requestedScopes) {
+      boolean found = false;
+      for (String allow : allowedScopes) {
+        if (req.equals(allow)) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        return false;
+      }
+    }
+    return true;
+  }
+
 }

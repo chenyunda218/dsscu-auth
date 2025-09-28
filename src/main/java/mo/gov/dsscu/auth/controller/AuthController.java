@@ -1,7 +1,9 @@
 package mo.gov.dsscu.auth.controller;
 
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -15,11 +17,13 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import io.jsonwebtoken.Claims;
 import mo.gov.dsscu.auth.controller.models.CreateApplicationReq;
 import mo.gov.dsscu.auth.controller.models.CreateSessionReq;
 import mo.gov.dsscu.auth.controller.models.CreateSessionResp;
 import mo.gov.dsscu.auth.controller.models.CreateUserReq;
 import mo.gov.dsscu.auth.controller.models.OidcResp;
+import mo.gov.dsscu.auth.controller.models.OidcTokenResp;
 import mo.gov.dsscu.auth.controller.models.UpdateApplicationReq;
 import mo.gov.dsscu.auth.model.Application;
 import mo.gov.dsscu.auth.model.OidcCode;
@@ -148,6 +152,9 @@ public class AuthController {
     if (!app.getRedirectUri().equals(redirect_uri)) {
       throw new RuntimeException("Invalid redirect URI");
     }
+    if (!app.validateScope(scope)) {
+      throw new RuntimeException("Invalid scope");
+    }
     User user = UserContext.getCurrentUser();
     OidcCode code = new OidcCode();
     code.setRedirectUri(redirect_uri);
@@ -162,13 +169,12 @@ public class AuthController {
   }
 
   @PostMapping("/oauth2/token")
-  public String token(
+  public OidcTokenResp token(
       @RequestParam Optional<String> grant_type,
       @RequestParam String code,
       @RequestParam String client_id,
       @RequestParam String client_secret,
       @RequestParam String redirect_uri) {
-    // TODO: process POST request
     Optional<Application> application = applicationRepo.findByClientId(client_id);
     if (application.isEmpty()) {
       throw new RuntimeException("Application not found");
@@ -177,13 +183,80 @@ public class AuthController {
     if (!app.getClientSecret().equals(client_secret)) {
       throw new RuntimeException("Invalid client secret");
     }
-    return "entity";
+    Optional<OidcCode> oidcCode = oidcCodeRepo.findByCode(code);
+    if (oidcCode.isEmpty()) {
+      throw new RuntimeException("Invalid code");
+    }
+    OidcCode c = oidcCode.get();
+    if (!c.getRedirectUri().equals(redirect_uri)) {
+      throw new RuntimeException("Invalid redirect URI");
+    }
+    if (!c.getClientId().equals(client_id)) {
+      throw new RuntimeException("Invalid client ID");
+    }
+    oidcCodeRepo.delete(c);
+    Optional<User> user = userRepo.findById(c.getUserId());
+    if (user.isEmpty()) {
+      throw new RuntimeException("User not found");
+    }
+    Map<String, Object> claims = new HashMap<>();
+    claims.put("iss", "mo.gov.dsscu");
+    claims.put("aud", app.getClientId());
+    claims.put("scope", c.getScopes());
+    claims.put("subject", app.getSubject());
+    String sub = "";
+    switch (app.getSubject()) {
+      case "id":
+        sub = Long.toString(user.get().getId());
+        break;
+      case "username":
+        sub = user.get().getUsername();
+        break;
+      default:
+        sub = Long.toString(user.get().getId());
+    }
+    String token = jwtUtils.createJwt(sub, 3600000 * 1000 * 24, claims);
+    OidcTokenResp entity = new OidcTokenResp();
+    entity.setAccessToken(token);
+    entity.setTokenType("Bearer");
+    return entity;
   }
 
   @GetMapping("/oauth2/userinfo")
-  public String getUserInfo(@RequestHeader("Authorization") String authHeader) {
-    System.out.println(authHeader);
-    return new String();
+  public Map<String, Object> getUserInfo(@RequestHeader("Authorization") String authHeader) {
+    String token = authHeader.substring(7);
+    if (!jwtUtils.validateJwt(token)) {
+      throw new RuntimeException("Invalid JWT");
+    }
+    Claims claims = jwtUtils.extractClaims(token);
+    String subject = claims.get("subject").toString();
+    String sub = jwtUtils.extractSubject(token);
+    String[] scopes = claims.get("scope").toString().split(" ");
+    Map<String, Object> info = new HashMap<>();
+    User user = null;
+    // 根據 subject 決定 sub 的查詢方式
+    switch (subject) {
+      case "id":
+        user = userRepo.findById(Long.parseLong(sub)).orElse(null);
+        break;
+      case "username":
+        user = userRepo.findByUsername(sub).orElse(null);
+        break;
+    }
+    if (user == null) {
+      throw new RuntimeException("User not found");
+    }
+    for (String scope : scopes) {
+      switch (scope) {
+        case "openid":
+          info.put("sub", sub);
+          break;
+        case "username":
+          info.put("username", user.getUsername());
+          break;
+      }
+    }
+    return info;
   }
 
   @GetMapping("/oauth2/.well-known/openid-configuration")
